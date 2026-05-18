@@ -143,6 +143,8 @@ def compute_epa_aqi(pollutants):
 
         if value is None:
             logging.warning("Pollutant '%s' is missing from API response", key)
+        
+        return value
 
     # etraxting values for each pollutants:
     pm2_5_raw = safe_key("pm2_5")
@@ -153,10 +155,13 @@ def compute_epa_aqi(pollutants):
     so2_raw = safe_key("so2")
 
     # performing unit conversion all except pm2.5 and pm10 from µg/m³ to ppb and ppm(CO)
-    o3_ppb  = (o3_raw  / O3_MW  * 1000) if o3_raw  is not None else None
-    no2_ppb = (no2_raw / NO2_MW * 1000) if no2_raw is not None else None
-    so2_ppb = (so2_raw / SO2_MW * 1000) if so2_raw is not None else None
-    co_ppm  = (co_raw  / CO_MW) if co_raw  is not None else None
+    # Formula: ppb = (µg/m³ × 24.45) / molecular_weight
+    MOLAR_VOLUME = 24.45
+
+    o3_ppb  = (o3_raw  * MOLAR_VOLUME / O3_MW)  if o3_raw  is not None else None
+    no2_ppb = (no2_raw * MOLAR_VOLUME / NO2_MW) if no2_raw is not None else None
+    so2_ppb = (so2_raw * MOLAR_VOLUME / SO2_MW) if so2_raw is not None else None
+    co_ppm  = (co_raw  * MOLAR_VOLUME / CO_MW / 1000) if co_raw  is not None else None
 
     logger.debug(
         "converted concentration - O3: %.2f ppb, NO2: %.2f ppb, SO2: %.2f ppb, CO: %.4f ppm",
@@ -207,6 +212,19 @@ def compute_epa_aqi(pollutants):
     }
 
 #=====================================================================
+#-------------------- FUNCTION 3 : CATEGORIZE EPA ------=-------------
+#=====================================================================
+
+def get_epa_category(aqi):
+    if aqi is None: return None
+    if aqi <= 50: return "Good"
+    if aqi <= 100: return "Moderate"
+    if aqi <= 150: return "Unhealthy for Sensitive Groups"
+    if aqi <= 200: return "Unhealthy"
+    if aqi <= 300: return "Very Unhealthy"
+    return "Hazardous"
+
+#=====================================================================
 #---------------------- FEATURE ENGENIEERING -------------------------
 #=====================================================================
 
@@ -225,7 +243,7 @@ def engineer_features(raw_pollution, raw_weather, historical_rows):
 
     # extracting raw pollutants concentrations.
     try:
-        components = raw_pollution['List'][0]['components']
+        components = raw_pollution['list'][0]['components']
     
     except (KeyError, IndexError, TypeError) as e:
         logger.error("Failed to extract pollutant components frm API response: %s", e)
@@ -323,7 +341,7 @@ def engineer_features(raw_pollution, raw_weather, historical_rows):
         if value is not None:
             historical_pm2_5.append(value)
 
-    all_pm2_5_values = historical_pm2_5 + current_pm2_5
+    all_pm2_5_values = historical_pm2_5 + [current_pm2_5]
 
     pm2_5_rolling_3h = round(sum(all_pm2_5_values) /  len(all_pm2_5_values), 4)
 
@@ -336,6 +354,7 @@ def engineer_features(raw_pollution, raw_weather, historical_rows):
 
         # Target variable
         "aqi":                  current_aqi,
+        "category":             get_epa_category(current_aqi),
         "dominant_pollutant":   aqi_result["dominant_pollutant"],
 
         # Raw pollutants
