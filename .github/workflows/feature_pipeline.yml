@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  OPENWEATHER_API_KEY = ${{ scerets.OPENWEATHER_API_KEY}}
+  OPENWEATHER_API_KEY: ${{ scerets.OPENWEATHER_API_KEY}}
   OPENWEATHER_AIR_URL: ${{ secrets.OPENWEATHER_AIR_URL }}
   OPENWEATHER_BASE_URL: ${{ secrets.OPENWEATHER_BASE_URL }}
   HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
@@ -21,18 +21,17 @@ jobs:
     timeout-minutes: 15
 
     steps:
-    - name: checkout repository
-      uses: actions/checkout@v4
+      - name: checkout repository
+        uses: actions/checkout@v4
 
-    - name: set up python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
-        cache: "pip"
+      - name: set up python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
 
-    - name: install dependencies
-      run: pip install -r requirements.txt
+      - name: install dependencies
+        run: pip install -r requirements.txt
 
-    - name: run feature pipeline
-      run: python src/pipeline_feature.py
-
+      - name: run feature pipeline
+        run: python src/pipeline_feature.py
