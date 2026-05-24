@@ -2,7 +2,7 @@ name: Hourly Feature Pipeline
 
 on:
   schedule:
-    - cron: " 17 * * * * "
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 env:
