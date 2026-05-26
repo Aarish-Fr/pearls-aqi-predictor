@@ -89,7 +89,7 @@ SO2_BREAKPOINTS = [
     (805, 1004, 401, 500),
 ]
 
-# openWeather returns pollutants O3, NO2, SO2, CO in µg/m³, 
+# open-meteo returns pollutants O3, NO2, SO2, CO in µg/m³, 
 # but EPA breakpoints uses uses ppb and ppm.
 
 # defining molecular weights of each pollutants (used for conversion)
@@ -242,20 +242,13 @@ def engineer_features(raw_pollution, raw_weather, historical_rows):
     logger.info("Engineering features. historical rows avaible: %d", len(historical_rows))
 
     # extracting raw pollutants concentrations.
-    try:
-        components = raw_pollution['list'][0]['components']
-    
-    except (KeyError, IndexError, TypeError) as e:
-        logger.error("Failed to extract pollutant components frm API response: %s", e)
-        return None
-    
     pollutants = {
-        "pm2_5": components.get("pm2_5"),
-        "pm10":  components.get("pm10"),
-        "no2":   components.get("no2"),
-        "o3":    components.get("o3"),
-        "co":    components.get("co"),
-        "so2":   components.get("so2"),
+        "pm2_5": raw_pollution.get("pm2_5"),
+        "pm10":  raw_pollution.get("pm10"),
+        "no2":   raw_pollution.get("nitrogen_dioxide"),
+        "o3":    raw_pollution.get("ozone"),
+        "co":    raw_pollution.get("carbon_monoxide"),
+        "so2":   raw_pollution.get("sulphur_dioxide"),
     }
 
     logger.debug("Extracted components: %s", pollutants)
@@ -269,31 +262,29 @@ def engineer_features(raw_pollution, raw_weather, historical_rows):
         return None
     
     # Extracting weather features:
-    try:
-        main = raw_weather.get("main", {})
-        wind = raw_weather.get("wind", {})
-        clouds = raw_weather.get("clouds", {})
-    
-    except AttributeError as e:
-        logger.error("Failed to parse weather api response: %s", e)
-        return None
-    
-    temp_kelvin = main.get("temp")          # openWeather provides temp in K so we convert this into C
-    temp_celsius = round(temp_kelvin - 273.15, 2) if temp_kelvin is not None else None
-    
     weather = {
-        "temp":       temp_celsius,
-        "humidity":   main.get("humidity"),
-        "pressure":   main.get("pressure"),
-        "wind_speed": wind.get("speed"),
-        "wind_deg":   wind.get("deg"),
-        "clouds":     clouds.get("all")
+        "temp":       raw_weather.get("temperature_2m"),
+        "humidity":   raw_weather.get("relative_humidity_2m"),
+        "pressure":   raw_weather.get("surface_pressure"),
+        "wind_speed": raw_weather.get("wind_speed_10m"),
+        "wind_deg":   raw_weather.get("wind_direction_10m"),
+        "clouds":     raw_weather.get("cloud_cover")
     }
 
     logger.debug("Extracted weather features: %s", weather)
 
     # Computing time-based features
-    now = datetime.now(timezone.utc)
+    try:
+        # Look for the historical timestamp first (for backfills). Fallback to now() for live pipeline.
+        obs_time_str = raw_weather.get("time")
+        if obs_time_str:
+            now = datetime.fromisoformat(obs_time_str).replace(tzinfo=timezone.utc)
+        else:
+            now = datetime.now(timezone.utc)
+    except (ValueError, TypeError, AttributeError) as e:
+        logger.warning("Failed to parse timestamp from weather data: %s. Falling back to current UTC time.", e)
+        now = datetime.now(timezone.utc)
+
     is_weekend = 1 if now.weekday() >= 5 else 0
 
     time_features = {
