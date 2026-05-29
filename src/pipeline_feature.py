@@ -72,7 +72,7 @@ def fetch_air_pollution() -> dict:
     params = {
         "latitude": LAT,
         "longitude": LON,
-        "hourly": "temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m,wind_direction_10m,cloud_cover",
+        "hourly": "pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone",
         "timezone": "UTC",
         "past_days": 1,       
         "forecast_days": 0  
@@ -219,7 +219,11 @@ def run_pipeline() -> None:
     if "+" not in feature_dict["timestamp"] and "Z" not in feature_dict["timestamp"]:
         feature_dict["timestamp"] = feature_dict["timestamp"] + "+00:00" 
 
-    collection.insert_one(feature_dict)
+    collection.update_one(
+    {"timestamp": feature_dict["timestamp"]},  
+    {"$set": feature_dict},                    
+    upsert=True                                
+)
 
     logger.info("Feature row inserted successfully")
 
