@@ -220,10 +220,10 @@ def run_pipeline() -> None:
         feature_dict["timestamp"] = feature_dict["timestamp"] + "+00:00" 
 
     collection.update_one(
-    {"timestamp": feature_dict["timestamp"]},  
-    {"$set": feature_dict},                    
-    upsert=True                                
-)
+        {"timestamp": feature_dict["timestamp"]},
+        {"$set": feature_dict},
+        upsert=True
+    )
 
     logger.info("Feature row inserted successfully")
 
