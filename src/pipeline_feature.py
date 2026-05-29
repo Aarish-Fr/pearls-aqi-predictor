@@ -14,7 +14,6 @@ import os
 import sys
 
 import requests
-import pandas as pd
 from dotenv import load_dotenv
 
 from features import engineer_features
@@ -38,16 +37,14 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-HOPSWORKS_API_KEY = os.getenv("HOPSWORKS_API_KEY")
-HOPSWORKS_PROJECT_NAME = os.getenv("HOPSWORKS_PROJECT_NAME")
+MONGO_URI = os.getenv("MONGO_URI")
 LAT = os.getenv("KARACHI_LAT")
 LON = os.getenv("KARACHI_LON")
 
 # Saftey Guard
 
 _required = {
-    "HOPSWORKS_API_KEY": HOPSWORKS_API_KEY,
-    "HOPSWORKS_PROJECT_NAME": HOPSWORKS_PROJECT_NAME,
+    "MONGO_URI": MONGO_URI,
     "KARACHI_LAT": LAT,
     "KARACHI_LON": LON,
 }
@@ -75,9 +72,10 @@ def fetch_air_pollution() -> dict:
     params = {
         "latitude": LAT,
         "longitude": LON,
-        "hourly": "pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone",
+        "hourly": "temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m,wind_direction_10m,cloud_cover",
         "timezone": "UTC",
-        "past_days": 1  
+        "past_days": 1,       
+        "forecast_days": 0  
     }
 
     logger.info("Fetching air pollution arrays from Open-Meteo")
@@ -107,7 +105,8 @@ def fetch_weather() -> dict:
         "longitude": LON,
         "hourly": "temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m,wind_direction_10m,cloud_cover",
         "timezone": "UTC",
-        "past_days": 1
+        "past_days": 1,       
+        "forecast_days": 0    
     }
 
     logger.info("Fetching weather arrays from Open-Meteo")
@@ -122,61 +121,44 @@ def fetch_weather() -> dict:
         raise
 
 #=====================================================================
-# -------------- Hopswork - Running the Pipline ------------------
+# -------------- MongoDB - Running the Pipeline ------------------
 #=====================================================================       
 
 def run_pipeline() -> None:
     '''
     Orchestrates the hourly features pipeline:
     '''
-
-    import hopsworks
-    import pandas as pd
+    import pymongo
+    import os
+    
+    MONGO_URI = os.getenv("MONGO_URI")
 
     logger.info("=" * 60)
-    logger.info("Pearls AQI Feature Pipeline — Run Started")
+    logger.info("Pearls AQI Feature Pipeline (MongoDB) — Run Started")
     logger.info("=" * 60)
 
-    # connecting to hopsworks:
-    logger.info("Connecting to hopswork's project: %s", HOPSWORKS_PROJECT_NAME)
+    # Connecting to MongoDB Atlas
+    logger.info("Connecting to MongoDB Atlas cluster")
+    client = pymongo.MongoClient(MONGO_URI)
+    db = client["aqi_project"]
+    collection = db["features"]
+    logger.info("Connected to MongoDB successfully")
 
-    project = hopsworks.login(
-        project=HOPSWORKS_PROJECT_NAME,
-        api_key_value=HOPSWORKS_API_KEY
-    )
-
-    fs = project.get_feature_store()
-    logging.info("Connected to hopswork feature store successfully")
-
-    # getting/creating feature group
-    logger.info("Retrieving Feature group")
-    feature_group = fs.get_or_create_feature_group(
-        name = "aqi_features",
-        version = 3, 
-        primary_key = ["timestamp"],
-        event_time = "timestamp",
-        description = "Hourly AQI features for Karachi"
-    )
-
-    logger.info("Feature group retrived successfuly")
-
-    # reading last three rows from hopsworks
-    logger.info("Reading the last three rows from the feature group")
+    # Reading last three rows from MongoDB for rolling averages
+    logger.info("Reading the last three rows from the features collection")
 
     try:
-        history_df = feature_group.read()
+        # Fetch the 3 newest rows
+        historical_cursor = collection.find().sort("timestamp", -1).limit(3)
+        historical_rows = list(historical_cursor)[::-1]
 
-        if history_df.empty:
-            logging.warning("Feature group is empty. Intializing edge case")
-            historical_rows = []
-
+        if not historical_rows:
+            logger.warning("MongoDB collection is empty. Initializing edge case.")
         else:
-            history_df = history_df.sort_values("timestamp", ascending=False)
-            historical_rows = history_df.head(3).to_dict(orient="records")
-            logger.info("Historical data loded: %d rows retrieved", len(historical_rows))
+            logger.info("Historical data loaded: %d rows retrieved", len(historical_rows))
 
     except Exception as e:
-        logger.warning("Couldnot read history from the feature group: %s. prceeding with edge case", e)
+        logger.warning("Could not read history from MongoDB: %s. Proceeding with edge case.", e)
         historical_rows = []
 
     # fetching the data
@@ -216,7 +198,7 @@ def run_pipeline() -> None:
         "time": times[latest_valid_index] 
     }
 
-    #engineering features:
+    # engineering features
     logger.info("Engineering features for timestamp: %s", times[latest_valid_index])
     feature_dict = engineer_features(current_pollution_dict, current_weather_dict, historical_rows)
 
@@ -231,22 +213,13 @@ def run_pipeline() -> None:
         feature_dict.get("category"),
     )
 
-    # Writing the new row in feature group
-    logger.info("Writing new feature row to the feature store")
-    feature_df = pd.DataFrame([feature_dict])
-    feature_df["timestamp"] = pd.to_datetime(feature_df["timestamp"], utc=True)    
+    # Writing the new row instantly to MongoDB
+    logger.info("Writing new feature row to MongoDB")
+    
+    if "+" not in feature_dict["timestamp"] and "Z" not in feature_dict["timestamp"]:
+        feature_dict["timestamp"] = feature_dict["timestamp"] + "+00:00" 
 
-    # Force all numeric columns to float64 to prevent Hopsworks bigint/double mismatch errors
-    numeric_columns = [
-        "aqi", "pm2_5", "pm10", "no2", "o3", "co", "so2", 
-        "temp", "humidity", "pressure", "wind_speed", "wind_deg", "clouds",
-        "aqi_change_rate", "pm2_5_rolling_3h"
-    ]
-    for col in numeric_columns:
-        if col in feature_df.columns:
-            feature_df[col] = feature_df[col].astype("float64")
-
-    feature_group.insert(feature_df)
+    collection.insert_one(feature_dict)
 
     logger.info("Feature row inserted successfully")
 

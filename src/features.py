@@ -303,9 +303,9 @@ def engineer_features(raw_pollution, raw_weather, historical_rows):
     if wind_speed is None:
         wind_speed_category = "unknown"
         logger.warning("Wind speed missing — category set to 'unknown'.")
-    elif wind_speed <= 1.5:
+    elif wind_speed <= 5.0:
         wind_speed_category = "calm"
-    elif wind_speed <= 3.3:
+    elif wind_speed <= 20.0:
         wind_speed_category = "moderate"
     else:
         wind_speed_category = "strong"
