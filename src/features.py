@@ -315,28 +315,26 @@ def engineer_features(raw_pollution, raw_weather, historical_rows):
 
     # edge-case 1 : when we dont have any record:
     if not historical_rows:
-        logger.warning("No historical row avaable. Using defaults fro derived features.")
+        logger.warning("No historical rows available. Using defaults for derived features.")
         aqi_change_rate = 0
-        pm2_5_rolling_3h = current_pm2_5
+        pm2_5_rolling_3h = round(current_pm2_5, 4) if current_pm2_5 is not None else 0
 
-    # edge-case 2 : when we have only one historical record:
+    # Normal case
     else:
         most_recent_row = historical_rows[-1]
+
         previous_aqi = most_recent_row.get("aqi")
-        aqi_change_rate = (round(current_aqi - previous_aqi, 2) if previous_aqi is not None else 0)
+        aqi_change_rate = round(current_aqi - previous_aqi, 2) if previous_aqi is not None else 0
 
-    historical_pm2_5 = []
+        historical_pm2_5 = [
+            row.get("pm2_5")
+            for row in historical_rows[-2:]
+            if row.get("pm2_5") is not None
+        ]
+        all_pm2_5_values = historical_pm2_5 + ([current_pm2_5] if current_pm2_5 is not None else [])
+        pm2_5_rolling_3h = round(sum(all_pm2_5_values) / len(all_pm2_5_values), 4) if all_pm2_5_values else 0
 
-    for row in historical_rows[-2:]:
-        value = row.get("pm2_5")
-        if value is not None:
-            historical_pm2_5.append(value)
-
-    all_pm2_5_values = historical_pm2_5 + [current_pm2_5]
-
-    pm2_5_rolling_3h = round(sum(all_pm2_5_values) /  len(all_pm2_5_values), 4)
-
-    logger.info("Derived features — aqi_change_rate: %s, pm2_5_rolling_3h: %s", aqi_change_rate, pm2_5_rolling_3h    )
+    logger.info("Derived features — aqi_change_rate: %s, pm2_5_rolling_3h: %s", aqi_change_rate, pm2_5_rolling_3h)
 
     # Assembling and returning the complete feature row:
     feature_row = {

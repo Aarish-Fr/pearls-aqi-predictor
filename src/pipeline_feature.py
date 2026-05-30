@@ -15,6 +15,7 @@ import sys
 
 import requests
 from dotenv import load_dotenv
+from datetime import datetime, timezone
 
 from features import engineer_features
 
@@ -179,6 +180,29 @@ def run_pipeline() -> None:
         if latest_valid_index == -1:
             logger.error("No valid pollution data found in the Open-Meteo response arrays.")
             sys.exit(1)
+
+        current_timestamp = times[latest_valid_index]
+
+        # early exit guardrail
+        if historical_rows:
+            try:
+                last_inserted_time = historical_rows[-1].get("timestamp")
+
+                # Parse both sides into timezone-aware datetime objects
+                last_inserted_dt = datetime.fromisoformat(last_inserted_time).replace(tzinfo=timezone.utc)
+                current_dt = datetime.fromisoformat(current_timestamp).replace(tzinfo=timezone.utc)
+
+                if last_inserted_dt == current_dt:
+                    logger.info(
+                        "API is lagging. Timestamp %s already processed. Exiting cleanly.",
+                        current_timestamp
+                    )
+                    sys.exit(0)
+
+            except (ValueError, TypeError, AttributeError) as e:
+                logger.warning(
+                    "Could not compare timestamps for early-exit check: %s. Proceeding with pipeline.", e
+                )
 
         # Extract the single values for that hour to pass to the feature engine
         current_pollution_dict = {
