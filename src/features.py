@@ -99,6 +99,44 @@ SO2_MW = 64.0
 CO_MW = 28.0
 
 #=====================================================================
+#----------------- EPA-MANDATED CONCENTRATION TRUNCATION -------------
+#=====================================================================
+
+import math
+
+def truncate_concentration(value, pollutant):
+    """
+    Truncates a pollutant concentration to the precision mandated by the EPA AQI Technical Assistance Document (Sept 2018) before breakpoint lookup. 
+
+    Precision rules:
+        PM2.5  → 1 decimal place  (e.g. 12.09 → 12.0)
+        PM10   → integer          (e.g. 54.7  → 54)
+        O3     → integer (ppb)    (e.g. 54.9  → 54)
+        CO     → 1 decimal place  (e.g. 4.49  → 4.4)
+        NO2    → integer (ppb)    (e.g. 100.9 → 100)
+        SO2    → integer (ppb)    (e.g. 35.8  → 35)
+    """
+
+    if value is None:
+        return None
+
+    # Pollutants requiring 1 decimal place precision
+    one_decimal = {"pm2_5", "co"}
+
+    # Pollutants requiring integer precision
+    integer_precision = {"pm10", "o3", "no2", "so2"}
+
+    if pollutant in one_decimal:
+        return math.floor(value * 10) / 10
+
+    if pollutant in integer_precision:
+        return math.floor(value)
+
+    # return value unchanged if pollutant is unrecognised
+    logger.warning("Unknown pollutant '%s' passed to truncate_concentration. Returning raw value.", pollutant)
+    return value
+
+#=====================================================================
 #----- FUNCTION 1 : CALCULATE AQI USING EPA BREAKPOINT TABLES --------
 #=====================================================================
 
@@ -171,16 +209,28 @@ def compute_epa_aqi(pollutants):
         co_ppm or 0
     )
 
-    # computing AQI for all pollutants:
-    per_pollutant_aqi = {
-        "pm2_5": calculate_aqi_for_pollutant(pm2_5_raw, PM25_BREAKPOINTS),
-        "pm10":  calculate_aqi_for_pollutant(pm10_raw,  PM10_BREAKPOINTS),
-        "o3":    calculate_aqi_for_pollutant(o3_ppb,    O3_BREAKPOINTS),
-        "co":    calculate_aqi_for_pollutant(co_ppm,    CO_BREAKPOINTS),
-        "no2":   calculate_aqi_for_pollutant(no2_ppb,   NO2_BREAKPOINTS),
-        "so2":   calculate_aqi_for_pollutant(so2_ppb,   SO2_BREAKPOINTS),
-    }
+    # Apply EPA-mandated truncation to each concentration before breakpoint lookup
+    pm2_5_t = truncate_concentration(pm2_5_raw, "pm2_5")
+    pm10_t  = truncate_concentration(pm10_raw,  "pm10")
+    o3_t    = truncate_concentration(o3_ppb,    "o3")
+    co_t    = truncate_concentration(co_ppm,    "co")
+    no2_t   = truncate_concentration(no2_ppb,   "no2")
+    so2_t   = truncate_concentration(so2_ppb,   "so2")
 
+    logger.debug(
+        "Truncated concentrations — PM2.5: %s, PM10: %s, O3: %s ppb, CO: %s ppm, NO2: %s ppb, SO2: %s ppb",
+        pm2_5_t, pm10_t, o3_t, co_t, no2_t, so2_t
+    )
+
+    # Computing AQI for all pollutants using truncated concentrations:
+    per_pollutant_aqi = {
+        "pm2_5": calculate_aqi_for_pollutant(pm2_5_t, PM25_BREAKPOINTS),
+        "pm10":  calculate_aqi_for_pollutant(pm10_t,  PM10_BREAKPOINTS),
+        "o3":    calculate_aqi_for_pollutant(o3_t,    O3_BREAKPOINTS),
+        "co":    calculate_aqi_for_pollutant(co_t,    CO_BREAKPOINTS),
+        "no2":   calculate_aqi_for_pollutant(no2_t,   NO2_BREAKPOINTS),
+        "so2":   calculate_aqi_for_pollutant(so2_t,   SO2_BREAKPOINTS),
+    }
     logger.debug("per-pollutant AQI values: %s", per_pollutant_aqi)
 
     # filtering out the failed ones and finding the max
