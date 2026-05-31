@@ -222,3 +222,7 @@ __marimo__/
 
 # Virtual environment
 venv/
+
+# ML artifacts 
+*.pkl
+*.keras
