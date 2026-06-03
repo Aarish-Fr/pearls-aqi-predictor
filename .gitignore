@@ -226,3 +226,4 @@ venv/
 # ML artifacts 
 *.pkl
 *.keras
+artifacts/

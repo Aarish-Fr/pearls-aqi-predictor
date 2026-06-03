@@ -1,9 +1,9 @@
 """
 Backfill-Pipeline:
 
-Fetches the last 90 days of historical data from Open-Meteo,
+Fetches historical data from Open-Meteo for a specified date range,
 processes it chronologically to maintain stateful rolling features,
-and bulk-inserts it into MongoDB.
+and bulk-upserts it into MongoDB.
 """
 
 import logging
@@ -14,6 +14,7 @@ import requests
 from dotenv import load_dotenv
 import pymongo
 from pymongo.errors import BulkWriteError
+from pymongo import UpdateOne 
 
 from features import engineer_features
 
@@ -54,40 +55,45 @@ if _missing:
 # ------------- Historical Data Fetching ------------------
 #=====================================================================
 
-def fetch_historical_data(days=92):
-    logger.info("Fetching %d days of historical data from Open-Meteo...", days)
+def fetch_historical_data(start_date: str, end_date: str):
+    """
+    Fetches air quality and weather data for an arbitrary date range.
+    """
+
+    logger.info("Fetching historical data from %s to %s ...", start_date, end_date)
     
-    poll_url = "https://air-quality-api.open-meteo.com/v1/air-quality"
+    poll_url    = "https://air-quality-api.open-meteo.com/v1/air-quality"
     poll_params = {
-        "latitude": LAT,
-        "longitude": LON,
-        "hourly": "pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone",
-        "timezone": "UTC",
-        "past_days": days,
-        "forecast_days": 0
+        "latitude":   LAT,
+        "longitude":  LON,
+        "hourly":     "pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone",
+        "timezone":   "UTC",
+        "start_date": start_date,                     
+        "end_date":   end_date,                       
     }
     
-    weather_url = "https://api.open-meteo.com/v1/forecast"
+    weather_url    = "https://archive-api.open-meteo.com/v1/archive"
     weather_params = {
-        "latitude": LAT,
-        "longitude": LON,
-        "hourly": "temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m,wind_direction_10m,cloud_cover",
-        "timezone": "UTC",
-        "past_days": days,
-        "forecast_days": 0
+        "latitude":   LAT,
+        "longitude":  LON,
+        "hourly":     "temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m,wind_direction_10m,cloud_cover",
+        "timezone":   "UTC",
+        "start_date": start_date,                     
+        "end_date":   end_date,                       
     }
 
     try:
-        poll_resp = requests.get(poll_url, params=poll_params, timeout=15)
+        poll_resp = requests.get(poll_url, params=poll_params, timeout=30)
         poll_resp.raise_for_status()
         raw_pollution = poll_resp.json()
         
-        weather_resp = requests.get(weather_url, params=weather_params, timeout=15)
+        weather_resp = requests.get(weather_url, params=weather_params, timeout=30)
         weather_resp.raise_for_status()
         raw_weather = weather_resp.json()
         
         logger.info("Historical data fetched successfully.")
         return raw_pollution, raw_weather
+    
     except requests.exceptions.RequestException as e:
         logger.error("Failed to fetch historical data: %s", e)
         sys.exit(1)
@@ -96,9 +102,10 @@ def fetch_historical_data(days=92):
 # -------------- Backfill Logic ------------------
 #=====================================================================       
 
-def run_backfill():
+def run_backfill(start_date: str, end_date: str):
     logger.info("=" * 60)
     logger.info("Pearls AQI Backfill Pipeline (MongoDB) Started")
+    logger.info("Date range: %s → %s", start_date, end_date)
     logger.info("=" * 60)
     
     #Connecting to MongoDB Atlas
@@ -111,15 +118,16 @@ def run_backfill():
         logger.info("Connected to MongoDB successfully")
 
         #Fetching Data
-        raw_pollution, raw_weather = fetch_historical_data(days=92)
+        raw_pollution, raw_weather = fetch_historical_data(start_date, end_date)
         times = raw_pollution['hourly']['time']
         total_hours = len(times)
         
         logger.info("Processing %d hours of data chronologically...", total_hours)
+        
+        #Processing data Chronologically
         backfill_history = []
         skipped_count = 0
 
-        #Processing data Chronologically
         for i in range(total_hours):
 
             if i > 0 and i % 500 == 0:
@@ -130,7 +138,7 @@ def run_backfill():
 
             # Safeguard: Ensure the timestamps perfectly align before extracting
             if raw_pollution['hourly']['time'][i] != raw_weather['hourly']['time'][i]:
-                logger.error("API Desync detected at index %d. Aborting to prevent corrupt data.", i)
+                logger.error("API Desync detected at index %d. Aborting.", i)
                 client.close()
                 sys.exit(1)
 
@@ -158,7 +166,7 @@ def run_backfill():
                 "time":                 times[i],
             }
 
-            historical_rows_to_pass = backfill_history[-3:] if len(backfill_history) > 0 else []
+            historical_rows_to_pass = backfill_history[-3:] if backfill_history else []
             
             logger.setLevel(logging.WARNING)
             feature_dict = engineer_features(current_pollution_dict, current_weather_dict, historical_rows_to_pass)
@@ -176,19 +184,47 @@ def run_backfill():
             len(backfill_history), skipped_count
         )
 
-        # Upsert Loop (Heals Corrupted Data)
-        logger.info("Initiating upsert to MongoDB to heal corrupted records...")
-        upsert_count = 0
+        if not backfill_history:
+            logger.warning("No valid rows produced. Nothing to upsert. Exiting.")
+            return
+
+        # Bulk Write to DB
+        logger.info(
+            "Initiating bulk upsert to MongoDB (%d rows) ...",
+            len(backfill_history)
+        )
+
+        BATCH_SIZE   = 1000                          
+        total_upserted = 0
         
-        for feature_dict in backfill_history:
-            collection.update_one(
-                {"timestamp": feature_dict["timestamp"]},
-                {"$set": feature_dict},
-                upsert=True
+        for batch_start in range(0, len(backfill_history), BATCH_SIZE):
+            batch = backfill_history[batch_start : batch_start + BATCH_SIZE]
+
+            operations = [
+                UpdateOne(
+                    {"timestamp": row["timestamp"]},
+                    {"$set": row},
+                    upsert=True
+                )
+                for row in batch
+            ]
+
+            result = collection.bulk_write(operations, ordered=False)
+            total_upserted += result.upserted_count + result.modified_count
+
+            logger.info(
+                "Batch %d/%d complete — upserted: %d | modified: %d",
+                (batch_start // BATCH_SIZE) + 1,
+                -(-len(backfill_history) // BATCH_SIZE),
+                result.upserted_count,
+                result.modified_count
             )
-            upsert_count += 1
-            
-        logger.info("Successfully upserted %d rows. Bad data overwritten.", upsert_count)
+
+        logger.info(
+            "Bulk upsert complete. %d total rows written to MongoDB.",
+            total_upserted
+        )
+
 
         logger.info("=" * 60)
         logger.info("Pearls AQI Backfill Pipeline — Run Completed Successfully")
@@ -201,8 +237,7 @@ def run_backfill():
 
 
 if __name__ == "__main__":
-    try:
-        run_backfill()
-    except Exception as e:
-        logger.error("Backfill failed: %s", e)
-        sys.exit(1)
+    run_backfill(
+        start_date = "2024-06-01",
+        end_date   = "2026-05-06"
+    )
