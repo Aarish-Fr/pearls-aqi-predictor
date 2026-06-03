@@ -971,12 +971,10 @@ def save_artifacts(
     os.environ["MLFLOW_TRACKING_USERNAME"] = DAGSHUB_USERNAME
     os.environ["MLFLOW_TRACKING_PASSWORD"] = DAGSHUB_TOKEN
 
-    dagshub.init(
-        repo_owner = DAGSHUB_USERNAME,
-        repo_name  = DAGSHUB_REPO,
-        mlflow     = True
-    )
-    log.info("DagsHub connection initialised. Starting MLflow run...")
+    tracking_uri = f"https://dagshub.com/{DAGSHUB_USERNAME}/{DAGSHUB_REPO}.mlflow"
+    mlflow.set_tracking_uri(tracking_uri)
+    
+    log.info("MLflow tracking URI set to DagsHub. Starting run...")
 
     with mlflow.start_run(run_name="pipeline_training") as run:
 
