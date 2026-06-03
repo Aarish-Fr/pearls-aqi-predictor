@@ -968,6 +968,9 @@ def save_artifacts(
         )
         sys.exit(1)
 
+    os.environ["MLFLOW_TRACKING_USERNAME"] = DAGSHUB_USERNAME
+    os.environ["MLFLOW_TRACKING_PASSWORD"] = DAGSHUB_TOKEN
+
     dagshub.init(
         repo_owner = DAGSHUB_USERNAME,
         repo_name  = DAGSHUB_REPO,
