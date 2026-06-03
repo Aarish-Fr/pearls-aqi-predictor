@@ -1,0 +1,38 @@
+name: Daily Training Pipeline
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+env:
+  MONGO_URI: ${{ secrets.MONGO_URI }}
+  DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
+  DAGSHUB_REPO: ${{ secrets.DAGSHUB_REPO }}
+  DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+  MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+  KARACHI_LAT: ${{ secrets.KARACHI_LAT }}
+  KARACHI_LON: ${{ secrets.KARACHI_LON }}
+
+jobs:
+  run-training-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+
+      - name: set up python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: run training pipeline
+        run: python src/pipeline_training.py
