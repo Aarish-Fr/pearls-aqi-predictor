@@ -169,89 +169,60 @@ def run_pipeline() -> None:
         raw_weather = fetch_weather()
 
         # Find the most recent hour that actually has pollution data reported
+        existing_timestamps = set(
+            doc["timestamp"] for doc in collection.find({}, {"timestamp": 1})
+        )
+        logger.info("Found %d existing timestamps in MongoDB.", len(existing_timestamps))
+        # Loop through ALL hours in the API response
         times = raw_pollution['hourly']['time']
-        latest_valid_index = -1
-        
-        for i in range(len(times) - 1, -1, -1):
-            if raw_pollution['hourly']['pm10'][i] is not None:
-                latest_valid_index = i
-                break
-                
-        if latest_valid_index == -1:
-            logger.error("No valid pollution data found in the Open-Meteo response arrays.")
-            sys.exit(1)
-
-        current_timestamp = times[latest_valid_index]
-
-        # early exit guardrail
-        if historical_rows:
-            try:
-                last_inserted_time = historical_rows[-1].get("timestamp")
-
-                # Parse both sides into timezone-aware datetime objects
-                last_inserted_dt = datetime.fromisoformat(last_inserted_time).replace(tzinfo=timezone.utc)
-                current_dt = datetime.fromisoformat(current_timestamp).replace(tzinfo=timezone.utc)
-
-                if last_inserted_dt == current_dt:
-                    logger.info(
-                        "API is lagging. Timestamp %s already processed. Exiting cleanly.",
-                        current_timestamp
-                    )
-                    sys.exit(0)
-
-            except (ValueError, TypeError, AttributeError) as e:
-                logger.warning(
-                    "Could not compare timestamps for early-exit check: %s. Proceeding with pipeline.", e
-                )
-
-        # Extract the single values for that hour to pass to the feature engine
-        current_pollution_dict = {
-            "pm2_5": raw_pollution['hourly']['pm2_5'][latest_valid_index],
-            "pm10": raw_pollution['hourly']['pm10'][latest_valid_index],
-            "nitrogen_dioxide": raw_pollution['hourly']['nitrogen_dioxide'][latest_valid_index],
-            "ozone": raw_pollution['hourly']['ozone'][latest_valid_index],
-            "carbon_monoxide": raw_pollution['hourly']['carbon_monoxide'][latest_valid_index],
-            "sulphur_dioxide": raw_pollution['hourly']['sulphur_dioxide'][latest_valid_index]
-        }
-        
-        current_weather_dict = {
-            "temperature_2m": raw_weather['hourly']['temperature_2m'][latest_valid_index],
-            "relative_humidity_2m": raw_weather['hourly']['relative_humidity_2m'][latest_valid_index],
-            "surface_pressure": raw_weather['hourly']['surface_pressure'][latest_valid_index],
-            "wind_speed_10m": raw_weather['hourly']['wind_speed_10m'][latest_valid_index],
-            "wind_direction_10m": raw_weather['hourly']['wind_direction_10m'][latest_valid_index],
-            "cloud_cover": raw_weather['hourly']['cloud_cover'][latest_valid_index],
-            "time": times[latest_valid_index] 
-        }
-
-        # engineering features
-        logger.info("Engineering features for timestamp: %s", times[latest_valid_index])
-        feature_dict = engineer_features(current_pollution_dict, current_weather_dict, historical_rows)
-
-        if feature_dict is None:
-            logger.error("Feature engineering returned None. Aborting pipeline insertion.")
-            sys.exit(1)
-            
-        logger.info(
-            "Features engineered — Timestamp: %s | AQI: %s | Category: %s",
-            feature_dict.get("timestamp"),
-            feature_dict.get("aqi"),
-            feature_dict.get("category"),
-        )
-
-        # Writing the new row instantly to MongoDB
-        logger.info("Writing new feature row to MongoDB")
-        
-        if "+" not in feature_dict["timestamp"] and "Z" not in feature_dict["timestamp"]:
-            feature_dict["timestamp"] = feature_dict["timestamp"] + "+00:00" 
-
-        collection.update_one(
-            {"timestamp": feature_dict["timestamp"]},
-            {"$set": feature_dict},
-            upsert=True
-        )
-
-        logger.info("Feature row inserted successfully")
+        inserted_count = 0
+        for i, timestamp in enumerate(times):
+            # Skip if pm10 is None (data not available for this hour)
+            if raw_pollution['hourly']['pm10'][i] is None:
+                continue
+            # Normalize timestamp to match MongoDB format
+            normalized_ts = timestamp + "+00:00" if "+" not in timestamp and "Z" not in timestamp else timestamp
+            # Skip if already in MongoDB
+            if normalized_ts in existing_timestamps:
+                logger.debug("Timestamp %s already exists. Skipping.", normalized_ts)
+                continue
+            # Extract this hour's data
+            current_pollution_dict = {
+                "pm2_5":             raw_pollution['hourly']['pm2_5'][i],
+                "pm10":              raw_pollution['hourly']['pm10'][i],
+                "nitrogen_dioxide":  raw_pollution['hourly']['nitrogen_dioxide'][i],
+                "ozone":             raw_pollution['hourly']['ozone'][i],
+                "carbon_monoxide":   raw_pollution['hourly']['carbon_monoxide'][i],
+                "sulphur_dioxide":   raw_pollution['hourly']['sulphur_dioxide'][i]
+            }
+            current_weather_dict = {
+                "temperature_2m":       raw_weather['hourly']['temperature_2m'][i],
+                "relative_humidity_2m": raw_weather['hourly']['relative_humidity_2m'][i],
+                "surface_pressure":     raw_weather['hourly']['surface_pressure'][i],
+                "wind_speed_10m":       raw_weather['hourly']['wind_speed_10m'][i],
+                "wind_direction_10m":   raw_weather['hourly']['wind_direction_10m'][i],
+                "cloud_cover":          raw_weather['hourly']['cloud_cover'][i],
+                "time":                 timestamp
+            }
+            logger.info("Engineering features for timestamp: %s", timestamp)
+            feature_dict = engineer_features(current_pollution_dict, current_weather_dict, historical_rows)
+            if feature_dict is None:
+                logger.warning("Feature engineering returned None for %s. Skipping.", timestamp)
+                continue
+            # Normalize and upsert into MongoDB
+            if "+" not in feature_dict["timestamp"] and "Z" not in feature_dict["timestamp"]:
+                feature_dict["timestamp"] = feature_dict["timestamp"] + "+00:00"
+            collection.update_one(
+                {"timestamp": feature_dict["timestamp"]},
+                {"$set": feature_dict},
+                upsert=True
+            )
+            inserted_count += 1
+            logger.info("Inserted: %s | AQI: %s", feature_dict.get("timestamp"), feature_dict.get("aqi"))
+        if inserted_count == 0:
+            logger.info("No new hours to insert. API may still be lagging. Exiting cleanly.")
+        else:
+            logger.info("Successfully inserted %d new rows into MongoDB.", inserted_count)
 
         logger.info("=" * 60)
         logger.info("Pearls AQI Feature Pipeline — Run Completed Successfully")
