@@ -12,6 +12,7 @@ Orchestrates the hourly data collection lifescycle
 import logging
 import os
 import sys
+import time
 
 import requests
 from dotenv import load_dotenv
@@ -111,15 +112,26 @@ def fetch_weather() -> dict:
     }
 
     logger.info("Fetching weather arrays from Open-Meteo")
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        logger.info("Open-Meteo weather data fetched successfully.")
-        return data
-    except requests.exceptions.RequestException as e:
-        logger.error("Failed to fetch current weather data: %s", e)
-        raise
+    
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.get(url, params=params, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            logger.info("Open-Meteo weather data fetched successfully.")
+            return data
+        except requests.exceptions.RequestException as e:
+            logger.warning(
+                "Attempt %d/%d failed to fetch weather data: %s",
+                attempt, max_retries, e
+            )
+            if attempt < max_retries:
+                logger.info("Retrying in 10 seconds...")
+                time.sleep(10)
+            else:
+                logger.error("All %d attempts failed. Raising exception.", max_retries)
+                raise
 
 #=====================================================================
 # -------------- MongoDB - Running the Pipeline ------------------
