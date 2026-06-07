@@ -5,6 +5,8 @@
 import os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 os.environ["TF_CPP_MIN_LOG_LEVEL"]  = "3"
+os.environ["OPENBLAS_NUM_THREADS"]  = "1"
+os.environ["OMP_NUM_THREADS"]       = "1"
 
 import streamlit as st
 import time
@@ -437,7 +439,7 @@ fig.update_layout(
     hovermode="x unified",
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 
 # =============================================================================

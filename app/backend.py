@@ -121,13 +121,19 @@ def _configure_mlflow():
     import mlflow
     from mlflow.tracking import MlflowClient
 
-    os.environ["MLFLOW_TRACKING_USERNAME"] = DAGSHUB_USERNAME
-    os.environ["MLFLOW_TRACKING_PASSWORD"] = DAGSHUB_TOKEN
+    username = os.getenv("DAGSHUB_USERNAME")
+    token    = os.getenv("DAGSHUB_TOKEN")
     
-    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    tracking_uri = f"https://dagshub.com/{username}/pearls-aqi-predictor.mlflow"
+    
+    if username and token:
+        os.environ["MLFLOW_TRACKING_USERNAME"] = username
+        os.environ["MLFLOW_TRACKING_PASSWORD"] = token
+        
+    mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()
     
-    logger.info("MLflow configured. Tracking URI: %s", MLFLOW_TRACKING_URI)
+    logger.info("MLflow configured. Tracking URI: %s", tracking_uri)
     
     return client
 
@@ -274,13 +280,14 @@ def _get_mongo_client() -> MongoClient:
     '''
     Create and return an authenticated MongoDB client.
     '''
+    mongo_uri = os.getenv("MONGO_URI")
     
-    if not MONGO_URI:
+    if not mongo_uri:
         raise RuntimeError(
             "MONGO_URI is not set. Add it to your .env file or Hugging Face Secrets."
         )
     
-    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
     
     # Force a real connection check — fails fast if URI is wrong
     client.admin.command("ping")
